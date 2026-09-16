@@ -1,0 +1,66 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+venv/
+backend/venv/
+.venv/
+env/
+
+# Next.js & Frontend Builds
+.next/
+frontend/.next/
+out/
+frontend/out/
+build/
+frontend/build/
+.turbo/
+frontend/.turbo/
+*.tsbuildinfo
+
+# Python & Cache
+__pycache__/
+backend/__pycache__/
+backend/app/__pycache__/
+backend/app/services/__pycache__/
+backend/app/routes/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.egg-info/
+dist/
+
+# Runtime Data / Temporary Uploads
+backend/data/uploads/*
+!backend/data/uploads/.gitkeep
+backend/data/compressed/*
+!backend/data/compressed/.gitkeep
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+frontend/.env*
+backend/.env*
+
+# Logs & Debugging
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# OS Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

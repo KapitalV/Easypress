@@ -1,0 +1,14 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
+Pillow>=10.2.0
+sse-starlette>=2.0.0
+aiofiles>=23.2.1
+celery[redis]>=5.3.0
+redis>=5.0.0
+
+# Optional — install if available on your platform
+# pyvips>=2.2.2
+# pyoxipng>=9.0.0
+# zipstream-ng>=1.7.1
+# python-magic-bin>=0.4.14
