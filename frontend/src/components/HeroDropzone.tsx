@@ -5,7 +5,8 @@ import {
   Upload,
   Camera,
   ArrowUpRight,
-  Sparkles,
+  FileCheck,
+  SlidersHorizontal,
   ShieldCheck,
   Zap,
 } from "lucide-react";
@@ -163,7 +164,7 @@ export default function HeroDropzone({
               </div>
 
               <div className="pt-2 flex items-center gap-1.5 text-[11px] font-semibold opacity-95">
-                <Sparkles className="w-3.5 h-3.5" />
+                <FileCheck className="w-3.5 h-3.5" />
                 <span>Auto JPG Conversion</span>
               </div>
             </div>
@@ -216,7 +217,7 @@ export default function HeroDropzone({
               className="py-3.5 flex items-center justify-between border-b border-zinc-800/80 cursor-pointer hover:text-white transition-colors group"
             >
               <div className="flex items-center gap-2.5">
-                <Sparkles className="w-4 h-4 text-blue-400" />
+                <SlidersHorizontal className="w-4 h-4 text-blue-400" />
                 <span className="text-sm font-semibold text-zinc-300 group-hover:text-white">
                   Lossless & Perceptual Compression
                 </span>

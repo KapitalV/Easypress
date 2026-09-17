@@ -23,8 +23,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className="bg-[#05070f] text-zinc-100 min-h-screen flex flex-col items-center relative selection:bg-blue-600 selection:text-white">
+    <html lang="en" suppressHydrationWarning>
+      <body
+        suppressHydrationWarning
+        className="bg-[#05070f] text-zinc-100 min-h-screen flex flex-col items-center relative selection:bg-blue-600 selection:text-white"
+      >
         {/* Animated Mesh Background (From DiplomaSathi) */}
         <div className="mesh-bg" aria-hidden="true">
           <div className="mesh-orb" />

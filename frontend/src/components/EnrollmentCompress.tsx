@@ -7,7 +7,8 @@ import {
   Download,
   FileArchive,
   RefreshCw,
-  Sparkles,
+  FileCheck,
+  CheckCircle2,
   AlertCircle,
   ArrowRight,
   ArrowUpRight,
@@ -131,7 +132,7 @@ export default function EnrollmentCompress() {
         </div>
 
         <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#1c1c20] border border-white/10 text-xs font-semibold text-blue-400 self-start sm:self-auto">
-          <Sparkles className="w-3.5 h-3.5" />
+          <FileCheck className="w-3.5 h-3.5" />
           <span>Auto-formatted to .JPG</span>
         </div>
       </div>
@@ -308,7 +309,7 @@ export default function EnrollmentCompress() {
           {/* Top Celebration Card */}
           <div className="widget-white rounded-[32px] p-7 text-center border border-zinc-100 shadow-md">
             <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold mb-3">
-              <Sparkles className="w-4 h-4 text-emerald-600" />
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
               <span>Ready for Portal Submission</span>
             </div>
             <h2 className="text-3xl font-black text-black">Files Prepared!</h2>

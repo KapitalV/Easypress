@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import {
   Download,
-  Sparkles,
+  CheckCircle2,
   RefreshCw,
   Eye,
   Pause,
@@ -71,7 +71,7 @@ export default function DownloadSummary({
       {/* Celebration Header Card */}
       <div className="w-full rounded-3xl glass-panel p-8 sm:p-10 flex flex-col items-center text-center shadow-xl border border-slate-200 bg-white relative overflow-hidden">
         <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold mb-4">
-          <Sparkles className="w-4 h-4 text-emerald-600" />
+          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
           <span>Optimization Complete</span>
         </div>
 

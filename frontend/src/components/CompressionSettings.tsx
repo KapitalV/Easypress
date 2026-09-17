@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Sliders, Sparkles, Target, ArrowRight, Info, CheckCircle2 } from "lucide-react";
+import { Sliders, Zap, Target, ArrowRight, Info, CheckCircle2 } from "lucide-react";
 
 export interface CompressionOptions {
   mode: "optimal" | "target";
@@ -60,7 +60,7 @@ export default function CompressionSettings({
                 : "text-slate-600 hover:text-slate-900"
             }`}
           >
-            <Sparkles className="w-4 h-4" />
+            <Zap className="w-4 h-4" />
             <span>Optimal</span>
           </button>
 

@@ -147,6 +147,7 @@ export default function Home() {
               src="/easypress_logo.png"
               alt="EasyPress Logo"
               fill
+              sizes="32px"
               className="object-cover"
               priority
             />
