@@ -1,3 +1,9 @@
+import {
+  compressEnrollmentClient,
+  compressBatchClient,
+  getRegisteredBlobUrl,
+} from "./clientCompressor";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export interface FileInfo {
@@ -50,6 +56,19 @@ export interface SSEEvent {
 }
 
 /**
+ * Determine whether client-side processing should be used.
+ * Automatically enables when on an HTTPS production site (like Vercel) where
+ * the local/remote backend is unreachable or blocked by Mixed Content.
+ */
+function shouldUseClientEngine(): boolean {
+  if (typeof window === "undefined") return false;
+  if (window.location.protocol === "https:" && API_BASE.includes("localhost")) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Upload images and create a compression job.
  */
 export async function uploadImages(
@@ -58,33 +77,59 @@ export async function uploadImages(
   targetMinKb?: number,
   targetMaxKb?: number
 ): Promise<JobResponse> {
-  const formData = new FormData();
-  files.forEach((file) => formData.append("files", file));
-  formData.append("mode", mode);
-  if (mode === "target" && targetMinKb !== undefined) {
-    formData.append("target_min_kb", targetMinKb.toString());
-  }
-  if (mode === "target" && targetMaxKb !== undefined) {
-    formData.append("target_max_kb", targetMaxKb.toString());
+  if (shouldUseClientEngine()) {
+    return compressBatchClient(files, mode, targetMinKb, targetMaxKb);
   }
 
-  const res = await fetch(`${API_BASE}/api/v1/jobs`, {
-    method: "POST",
-    body: formData,
-  });
+  try {
+    const formData = new FormData();
+    files.forEach((file) => formData.append("files", file));
+    formData.append("mode", mode);
+    if (mode === "target" && targetMinKb !== undefined) {
+      formData.append("target_min_kb", targetMinKb.toString());
+    }
+    if (mode === "target" && targetMaxKb !== undefined) {
+      formData.append("target_max_kb", targetMaxKb.toString());
+    }
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail));
+    const res = await fetch(`${API_BASE}/api/v1/jobs`, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(
+        typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail)
+      );
+    }
+
+    return res.json();
+  } catch (err: any) {
+    // If backend connection fails (e.g. Mixed Content or offline), fall back to client-side engine
+    if (typeof window !== "undefined") {
+      console.warn("Backend unavailable, falling back to client-side engine:", err);
+      return compressBatchClient(files, mode, targetMinKb, targetMaxKb);
+    }
+    throw err;
   }
-
-  return res.json();
 }
 
 /**
  * Get current job status (polling fallback).
  */
 export async function getJobStatus(jobId: string): Promise<JobStatus> {
+  if (jobId.startsWith("client-")) {
+    return {
+      job_id: jobId,
+      status: "completed",
+      files: [],
+      total_original_size: 0,
+      total_compressed_size: 0,
+      total_savings_percent: 0,
+    };
+  }
+
   const res = await fetch(`${API_BASE}/api/v1/jobs/${jobId}`);
   if (!res.ok) throw new Error(`Job not found: ${jobId}`);
   return res.json();
@@ -99,10 +144,23 @@ export function subscribeToProgress(
   onError?: (error: Event) => void,
   onComplete?: () => void
 ): () => void {
+  // If client-side job, fire instant completion event
+  if (jobId.startsWith("client-")) {
+    const timer = setTimeout(() => {
+      onEvent({
+        type: "job_complete",
+        status: "completed",
+        batch_progress: 100,
+      });
+      onComplete?.();
+    }, 150);
+    return () => clearTimeout(timer);
+  }
+
   const eventSource = new EventSource(`${API_BASE}/api/v1/jobs/${jobId}/events`);
 
-  eventSource.addEventListener("init", (e) => {
-    // Initial state - can be used to set up UI
+  eventSource.addEventListener("init", () => {
+    // Initial state
   });
 
   eventSource.addEventListener("file_progress", (e) => {
@@ -129,7 +187,7 @@ export function subscribeToProgress(
   });
 
   eventSource.addEventListener("ping", () => {
-    // Keepalive — ignore
+    // Keepalive
   });
 
   eventSource.onerror = (e) => {
@@ -137,7 +195,6 @@ export function subscribeToProgress(
     eventSource.close();
   };
 
-  // Return unsubscribe function
   return () => eventSource.close();
 }
 
@@ -145,6 +202,12 @@ export function subscribeToProgress(
  * Get download URL for a job (all files or single file).
  */
 export function getDownloadUrl(jobId: string, fileId?: string): string {
+  // Check client-side in-memory registry first
+  const registeredUrl = getRegisteredBlobUrl(jobId, fileId);
+  if (registeredUrl) {
+    return registeredUrl;
+  }
+
   if (fileId) {
     return `${API_BASE}/api/v1/download/${jobId}/${fileId}`;
   }
@@ -155,6 +218,10 @@ export function getDownloadUrl(jobId: string, fileId?: string): string {
  * Get original file URL (for comparison).
  */
 export function getOriginalUrl(jobId: string, fileId: string): string {
+  const registeredUrl = getRegisteredBlobUrl(jobId, fileId);
+  if (registeredUrl) {
+    return registeredUrl;
+  }
   return `${API_BASE}/api/v1/download/${jobId}/${fileId}/original`;
 }
 
@@ -203,20 +270,39 @@ export async function uploadEnrollment(
   signature: File,
   prefix: string
 ): Promise<EnrollmentResponse> {
-  const formData = new FormData();
-  formData.append("photo", photo);
-  formData.append("signature", signature);
-  formData.append("prefix", prefix || "candidate");
-
-  const res = await fetch(`${API_BASE}/api/v1/jobs/enrollment`, {
-    method: "POST",
-    body: formData,
-  });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail));
+  // If on HTTPS live site with localhost backend, run client-side engine directly
+  if (shouldUseClientEngine()) {
+    return compressEnrollmentClient(photo, signature, prefix);
   }
 
-  return res.json();
+  try {
+    const formData = new FormData();
+    formData.append("photo", photo);
+    formData.append("signature", signature);
+    formData.append("prefix", prefix || "candidate");
+
+    const res = await fetch(`${API_BASE}/api/v1/jobs/enrollment`, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(
+        typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail)
+      );
+    }
+
+    return res.json();
+  } catch (err: any) {
+    // If backend is unreachable or throws "Failed to fetch", seamlessly fall back to client-side engine
+    if (typeof window !== "undefined") {
+      console.warn(
+        "Backend server unreachable, falling back to client-side engine:",
+        err
+      );
+      return compressEnrollmentClient(photo, signature, prefix);
+    }
+    throw err;
+  }
 }
