@@ -373,20 +373,29 @@ async def create_enrollment_job(
     photo: UploadFile = File(...),
     signature: UploadFile = File(...),
     prefix: str = Form(default="candidate"),
+    photo_min_kb: Optional[int] = Form(default=30),
+    photo_max_kb: Optional[int] = Form(default=50),
+    sign_min_kb: Optional[int] = Form(default=10),
+    sign_max_kb: Optional[int] = Form(default=30),
 ):
     """
     Dedicated Enrollment Compression:
-    - Photo compressed to 30KB–50KB range, converted to JPEG, named '{prefix}_image.jpg'
-    - Signature compressed to 10KB–30KB range, converted to JPEG, named '{prefix}_sign.jpg'
+    - Photo compressed or extended into target range (default 30KB–50KB), converted to JPEG, named '{prefix}_image.jpg'
+    - Signature compressed or extended into target range (default 10KB–30KB), converted to JPEG, named '{prefix}_sign.jpg'
     """
     clean_prefix = "".join(c for c in prefix.strip() if c.isalnum() or c in ("-", "_")).lower()
     if not clean_prefix:
         clean_prefix = "candidate"
 
-    photo_min = 30 * 1024
-    photo_max = 50 * 1024
-    sign_min = 10 * 1024
-    sign_max = 30 * 1024
+    photo_min_val = photo_min_kb if photo_min_kb and photo_min_kb > 0 else 30
+    photo_max_val = photo_max_kb if photo_max_kb and photo_max_kb >= photo_min_val else 50
+    sign_min_val = sign_min_kb if sign_min_kb and sign_min_kb > 0 else 10
+    sign_max_val = sign_max_kb if sign_max_kb and sign_max_kb >= sign_min_val else 30
+
+    photo_min = photo_min_val * 1024
+    photo_max = photo_max_val * 1024
+    sign_min = sign_min_val * 1024
+    sign_max = sign_max_val * 1024
 
     photo_data = await photo.read()
     sign_data = await signature.read()
@@ -445,7 +454,7 @@ async def create_enrollment_job(
         "quality": photo_res.quality,
         "width": photo_res.width,
         "height": photo_res.height,
-        "target_range": "30KB - 50KB",
+        "target_range": f"{photo_min_val}KB - {photo_max_val}KB",
     }
 
     sign_info = {
@@ -460,7 +469,7 @@ async def create_enrollment_job(
         "quality": sign_res.quality,
         "width": sign_res.width,
         "height": sign_res.height,
-        "target_range": "10KB - 30KB",
+        "target_range": f"{sign_min_val}KB - {sign_max_val}KB",
     }
 
     job["status"] = "completed"

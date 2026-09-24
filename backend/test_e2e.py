@@ -290,6 +290,100 @@ def test_dual_enrollment():
     except Exception as e:
         log_fail("Dual enrollment test failed", e)
 
+def test_extend_small_file_target():
+    print("\n--- 5. Small Image Extension (Low Quality/Size Extended to Target: 10KB -> 30-50KB) ---")
+    try:
+        # Create a small 5KB-10KB photo
+        small_photo = Image.new("RGB", (300, 400), color=(180, 200, 220))
+        draw = ImageDraw.Draw(small_photo)
+        draw.ellipse([80, 80, 220, 260], fill=(220, 180, 150))
+        p_buf = io.BytesIO()
+        small_photo.save(p_buf, format="JPEG", quality=75)
+        small_photo_bytes = p_buf.getvalue()
+        small_photo_kb = len(small_photo_bytes) / 1024
+        print(f"     Uploaded small photo: {small_photo_kb:.1f} KB (Target: 30KB - 50KB)")
+
+        # Create a small 1KB-2KB signature
+        small_sign = Image.new("RGBA", (400, 150), color=(255, 255, 255, 0))
+        sdraw = ImageDraw.Draw(small_sign)
+        sdraw.line([(20, 75), (100, 30), (200, 100), (350, 50)], fill=(0, 0, 150, 255), width=5)
+        s_buf = io.BytesIO()
+        small_sign.save(s_buf, format="PNG")
+        small_sign_bytes = s_buf.getvalue()
+        small_sign_kb = len(small_sign_bytes) / 1024
+        print(f"     Uploaded small signature: {small_sign_kb:.1f} KB (Target: 10KB - 30KB)")
+
+        # Test Batch Target Extension
+        content_type, body = build_multipart(
+            fields={
+                "mode": "target",
+                "target_min_kb": "30",
+                "target_max_kb": "50",
+            },
+            files=[
+                ("files", "small_photo.jpg", small_photo_bytes, "image/jpeg"),
+            ]
+        )
+        req = urllib.request.Request(f"{BACKEND_URL}/api/v1/jobs", data=body)
+        req.add_header("Content-Type", content_type)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            res_data = json.loads(resp.read().decode())
+            job_id = res_data["job_id"]
+
+        for _ in range(30):
+            time.sleep(0.5)
+            status_req = urllib.request.Request(f"{BACKEND_URL}/api/v1/jobs/{job_id}")
+            with urllib.request.urlopen(status_req, timeout=5) as sresp:
+                sdata = json.loads(sresp.read().decode())
+                if sdata["status"] == "completed":
+                    break
+
+        file0 = sdata["files"][0]
+        size_kb = file0["compressed_size"] / 1024
+        print(f"     Batch Target result: {small_photo_kb:.1f} KB -> {size_kb:.1f} KB (Target: 30KB - 50KB)")
+        if 30.0 <= size_kb <= 50.0:
+            log_pass(f"Small file successfully extended to target range: {size_kb:.1f} KB")
+        else:
+            log_fail(f"Small file not extended to target range: {size_kb:.1f} KB")
+
+        # Test Enrollment Extension with custom ranges
+        content_type_enroll, body_enroll = build_multipart(
+            fields={
+                "prefix": "rohit",
+                "photo_min_kb": "30",
+                "photo_max_kb": "50",
+                "sign_min_kb": "10",
+                "sign_max_kb": "30",
+            },
+            files=[
+                ("photo", "small_photo.jpg", small_photo_bytes, "image/jpeg"),
+                ("signature", "small_sign.png", small_sign_bytes, "image/png"),
+            ]
+        )
+        req_enroll = urllib.request.Request(f"{BACKEND_URL}/api/v1/jobs/enrollment", data=body_enroll)
+        req_enroll.add_header("Content-Type", content_type_enroll)
+        with urllib.request.urlopen(req_enroll, timeout=15) as resp_enroll:
+            enroll_data = json.loads(resp_enroll.read().decode())
+            log_pass("Enrollment with small files returned 200 OK")
+
+        e_photo_kb = enroll_data["photo"]["compressed_size"] / 1024
+        e_sign_kb = enroll_data["signature"]["compressed_size"] / 1024
+        print(f"     Enrollment Photo: {small_photo_kb:.1f} KB -> {e_photo_kb:.1f} KB (Target: 30-50 KB)")
+        print(f"     Enrollment Sign: {small_sign_kb:.1f} KB -> {e_sign_kb:.1f} KB (Target: 10-30 KB)")
+
+        if 30.0 <= e_photo_kb <= 50.0:
+            log_pass(f"Enrollment photo extended to target range: {e_photo_kb:.1f} KB")
+        else:
+            log_fail(f"Enrollment photo out of range: {e_photo_kb:.1f} KB")
+
+        if 10.0 <= e_sign_kb <= 30.0:
+            log_pass(f"Enrollment signature extended to target range: {e_sign_kb:.1f} KB")
+        else:
+            log_fail(f"Enrollment signature out of range: {e_sign_kb:.1f} KB")
+
+    except Exception as e:
+        log_fail("Small file extension test failed", e)
+
 def test_validation_and_errors():
     print("\n--- 5. Security & Input Validation ---")
     # Test 1: Upload non-image data
@@ -359,6 +453,7 @@ if __name__ == "__main__":
     test_batch_optimal()
     test_batch_target()
     test_dual_enrollment()
+    test_extend_small_file_target()
     test_validation_and_errors()
     test_frontend()
 

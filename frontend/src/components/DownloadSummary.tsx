@@ -76,10 +76,21 @@ export default function DownloadSummary({
         </div>
 
         <h1 className="text-3xl sm:text-5xl font-black text-slate-900 tracking-tight mb-3">
-          Your images are now{" "}
-          <span className="text-emerald-700">
-            {overallSavingsPercent}% smaller!
-          </span>
+          {totalCompressed <= totalOriginal ? (
+            <>
+              Your images are now{" "}
+              <span className="text-emerald-700">
+                {overallSavingsPercent}% smaller!
+              </span>
+            </>
+          ) : (
+            <>
+              Your images are now{" "}
+              <span className="text-indigo-700">
+                Enhanced & Sized to Target!
+              </span>
+            </>
+          )}
         </h1>
 
         {/* Size comparison pill */}
@@ -87,12 +98,14 @@ export default function DownloadSummary({
           <span className="text-slate-600 line-through">
             {formatBytes(totalOriginal)}
           </span>
-          <span className="text-emerald-600 font-bold text-lg">→</span>
-          <span className="text-emerald-700 font-extrabold text-lg">
+          <span className={totalCompressed <= totalOriginal ? "text-emerald-600 font-bold text-lg" : "text-indigo-600 font-bold text-lg"}>→</span>
+          <span className={totalCompressed <= totalOriginal ? "text-emerald-700 font-extrabold text-lg" : "text-indigo-700 font-extrabold text-lg"}>
             {formatBytes(totalCompressed)}
           </span>
           <span className="text-xs text-slate-600 font-sans hidden sm:inline">
-            (Saved {formatBytes(totalSavedBytes)})
+            {totalCompressed <= totalOriginal
+              ? `(Saved ${formatBytes(totalSavedBytes)})`
+              : `(Extended to Target Range)`}
           </span>
         </div>
 
@@ -165,12 +178,18 @@ export default function DownloadSummary({
                     <span className="text-slate-600 line-through text-[11px]">
                       {formatBytes(file.original_size)}
                     </span>
-                    <span className="text-emerald-700 font-bold">
+                    <span className={(file.compressed_size || file.original_size) > file.original_size ? "text-indigo-700 font-bold" : "text-emerald-700 font-bold"}>
                       {formatBytes(file.compressed_size || file.original_size)}
                     </span>
-                    <span className="px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold">
-                      -{Math.round(singleSavings)}%
-                    </span>
+                    {(file.compressed_size || file.original_size) > file.original_size ? (
+                      <span className="px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 text-[10px] font-bold">
+                        Extended to Target
+                      </span>
+                    ) : (
+                      <span className="px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold">
+                        -{Math.round(singleSavings)}%
+                      </span>
+                    )}
                   </div>
                 </div>
 

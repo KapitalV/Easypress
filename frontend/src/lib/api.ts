@@ -268,11 +268,23 @@ export interface EnrollmentResponse {
 export async function uploadEnrollment(
   photo: File,
   signature: File,
-  prefix: string
+  prefix: string,
+  photoMinKb: number = 30,
+  photoMaxKb: number = 50,
+  signMinKb: number = 10,
+  signMaxKb: number = 30
 ): Promise<EnrollmentResponse> {
   // If on HTTPS live site with localhost backend, run client-side engine directly
   if (shouldUseClientEngine()) {
-    return compressEnrollmentClient(photo, signature, prefix);
+    return compressEnrollmentClient(
+      photo,
+      signature,
+      prefix,
+      photoMinKb,
+      photoMaxKb,
+      signMinKb,
+      signMaxKb
+    );
   }
 
   try {
@@ -280,6 +292,10 @@ export async function uploadEnrollment(
     formData.append("photo", photo);
     formData.append("signature", signature);
     formData.append("prefix", prefix || "candidate");
+    formData.append("photo_min_kb", photoMinKb.toString());
+    formData.append("photo_max_kb", photoMaxKb.toString());
+    formData.append("sign_min_kb", signMinKb.toString());
+    formData.append("sign_max_kb", signMaxKb.toString());
 
     const res = await fetch(`${API_BASE}/api/v1/jobs/enrollment`, {
       method: "POST",
@@ -301,7 +317,15 @@ export async function uploadEnrollment(
         "Backend server unreachable, falling back to client-side engine:",
         err
       );
-      return compressEnrollmentClient(photo, signature, prefix);
+      return compressEnrollmentClient(
+        photo,
+        signature,
+        prefix,
+        photoMinKb,
+        photoMaxKb,
+        signMinKb,
+        signMaxKb
+      );
     }
     throw err;
   }

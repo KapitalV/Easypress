@@ -92,8 +92,189 @@ function canvasToBlob(
   });
 }
 
+function crc32(buf: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    crc ^= buf[i];
+    for (let j = 0; j < 8; j++) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+/**
+ * Format-compliant non-destructive byte padding for Blob in browser
+ */
+async function padBlobBytes(blob: Blob, targetBytes: number, mime: string): Promise<Blob> {
+  const buffer = await blob.arrayBuffer();
+  const data = new Uint8Array(buffer);
+  if (data.length >= targetBytes) return blob;
+
+  let needed = targetBytes - data.length;
+
+  if (mime.includes("jpeg") || mime.includes("jpg")) {
+    const chunks: number[] = [];
+    while (needed > 0) {
+      if (needed < 5) {
+        for (let i = 0; i < needed; i++) chunks.push(0x00);
+        break;
+      }
+      const payloadLen = Math.min(needed - 4, 65530);
+      const markerLen = payloadLen + 2;
+      chunks.push(0xff, 0xfe, (markerLen >> 8) & 0xff, markerLen & 0xff);
+      for (let i = 0; i < payloadLen; i++) chunks.push(0x00);
+      needed -= (payloadLen + 4);
+    }
+    const newBuf = new Uint8Array(data.length + chunks.length);
+    if (data.length >= 2 && data[0] === 0xff && data[1] === 0xd8) {
+      newBuf.set(data.subarray(0, 2), 0);
+      newBuf.set(new Uint8Array(chunks), 2);
+      newBuf.set(data.subarray(2), 2 + chunks.length);
+    } else {
+      newBuf.set(data, 0);
+      newBuf.set(new Uint8Array(chunks), data.length);
+    }
+    return new Blob([newBuf], { type: mime });
+  } else if (mime.includes("png")) {
+    if (needed < 14) {
+      const padded = new Uint8Array(data.length + needed);
+      padded.set(data, 0);
+      return new Blob([padded], { type: mime });
+    }
+    const payloadLen = needed - 12;
+    const payload = new Uint8Array(payloadLen);
+    const key = [67, 111, 109, 109, 101, 110, 116, 0]; // "Comment\0"
+    for (let i = 0; i < Math.min(payloadLen, key.length); i++) payload[i] = key[i];
+
+    const typeAndData = new Uint8Array(4 + payloadLen);
+    typeAndData.set([116, 69, 88, 116], 0); // "tEXt"
+    typeAndData.set(payload, 4);
+
+    const crcVal = crc32(typeAndData);
+    const chunk = new Uint8Array(12 + payloadLen);
+    chunk[0] = (payloadLen >> 24) & 0xff;
+    chunk[1] = (payloadLen >> 16) & 0xff;
+    chunk[2] = (payloadLen >> 8) & 0xff;
+    chunk[3] = payloadLen & 0xff;
+    chunk.set(typeAndData, 4);
+    chunk[4 + typeAndData.length] = (crcVal >> 24) & 0xff;
+    chunk[5 + typeAndData.length] = (crcVal >> 16) & 0xff;
+    chunk[6 + typeAndData.length] = (crcVal >> 8) & 0xff;
+    chunk[7 + typeAndData.length] = crcVal & 0xff;
+
+    let iendPos = -1;
+    for (let i = data.length - 12; i >= 0; i--) {
+      if (data[i] === 73 && data[i + 1] === 69 && data[i + 2] === 78 && data[i + 3] === 68) {
+        iendPos = i - 4;
+        break;
+      }
+    }
+    const result = new Uint8Array(data.length + chunk.length);
+    if (iendPos !== -1) {
+      result.set(data.subarray(0, iendPos), 0);
+      result.set(chunk, iendPos);
+      result.set(data.subarray(iendPos), iendPos + chunk.length);
+    } else {
+      result.set(data, 0);
+      result.set(chunk, data.length);
+    }
+    return new Blob([result], { type: mime });
+  } else {
+    const padded = new Uint8Array(data.length + needed);
+    padded.set(data, 0);
+    return new Blob([padded], { type: mime });
+  }
+}
+
+/**
+ * Extend image client-side to target range [minBytes, maxBytes]
+ */
+async function extendImageToTargetClient(
+  img: HTMLImageElement,
+  targetMinBytes: number,
+  targetMaxBytes: number,
+  outputMime: string = "image/jpeg"
+): Promise<CompressCanvasResult> {
+  const targetMid = Math.round((targetMinBytes + targetMaxBytes) / 2);
+  const { canvas } = renderToCanvas(img, 1.0);
+
+  // Try high quality Q = 0.98 first
+  let blob = await canvasToBlob(canvas, outputMime, 0.98);
+  let bestBlob = blob;
+  let bestQ = 98;
+  let bestW = canvas.width;
+  let bestH = canvas.height;
+
+  if (targetMinBytes <= blob.size && blob.size <= targetMaxBytes) {
+    return {
+      blob,
+      quality: 98,
+      width: canvas.width,
+      height: canvas.height,
+      wasDownsampled: false,
+    };
+  }
+
+  // If still below targetMinBytes and image is reasonably sized, upscale canvas
+  if (blob.size < targetMinBytes && Math.max(canvas.width, canvas.height) < 2500) {
+    const scaleEst = Math.min(3.0, Math.max(1.15, Math.sqrt(targetMid / Math.max(blob.size, 800))));
+    const upW = Math.max(1, Math.round(canvas.width * scaleEst));
+    const upH = Math.max(1, Math.round(canvas.height * scaleEst));
+
+    const upCanvas = document.createElement("canvas");
+    upCanvas.width = upW;
+    upCanvas.height = upH;
+    const upCtx = upCanvas.getContext("2d", { willReadFrequently: false })!;
+    upCtx.fillStyle = "#ffffff";
+    upCtx.fillRect(0, 0, upW, upH);
+    upCtx.imageSmoothingEnabled = true;
+    upCtx.imageSmoothingQuality = "high";
+    upCtx.drawImage(img, 0, 0, upW, upH);
+
+    let lo = 0.75;
+    let hi = 0.98;
+    while (lo <= hi) {
+      const mid = Math.round(((lo + hi) / 2) * 100) / 100;
+      const trial = await canvasToBlob(upCanvas, outputMime, mid);
+      if (targetMinBytes <= trial.size && trial.size <= targetMaxBytes) {
+        return {
+          blob: trial,
+          quality: Math.round(mid * 100),
+          width: upW,
+          height: upH,
+          wasDownsampled: false,
+        };
+      } else if (trial.size > targetMaxBytes) {
+        hi = mid - 0.05;
+      } else {
+        bestBlob = trial;
+        bestQ = Math.round(mid * 100);
+        bestW = upW;
+        bestH = upH;
+        lo = mid + 0.05;
+      }
+    }
+  }
+
+  // If still below targetMinBytes, pad to targetMid
+  if (bestBlob.size < targetMinBytes) {
+    bestBlob = await padBlobBytes(bestBlob, targetMid, outputMime);
+  }
+
+  return {
+    blob: bestBlob,
+    quality: bestQ,
+    width: bestW,
+    height: bestH,
+    wasDownsampled: false,
+  };
+}
+
 /**
  * Binary search compression to fit target size [minBytes, maxBytes]
+ * Handles bidirectional sizing: compressing large files down, and
+ * enhancing/extending small/low-quality files up into the target range.
  */
 export async function compressToTargetClient(
   file: File | Blob,
@@ -102,6 +283,12 @@ export async function compressToTargetClient(
   outputMime: string = "image/jpeg"
 ): Promise<CompressCanvasResult> {
   const img = await loadImage(file);
+
+  // If initial file is already smaller than targetMinBytes, immediately extend & upscale
+  if (file.size < targetMinBytes) {
+    return extendImageToTargetClient(img, targetMinBytes, targetMaxBytes, outputMime);
+  }
+
   let scale = 1.0;
   let wasDownsampled = false;
 
@@ -149,11 +336,9 @@ export async function compressToTargetClient(
 
     while (scale >= 0.15) {
       const { canvas: resizedCanvas } = renderToCanvas(img, scale);
-      // Try at Q=0.4
       const testBlob = await canvasToBlob(resizedCanvas, outputMime, 0.4);
 
       if (testBlob.size <= targetMaxBytes) {
-        // Search upward for best quality within range
         let loQ = 0.3;
         let hiQ = 0.92;
         let finalBlob = testBlob;
@@ -193,10 +378,14 @@ export async function compressToTargetClient(
     }
   }
 
-  // Fallback: return best effort blob
-  const finalBlob = bestBlob || (await canvasToBlob(canvas, outputMime, 0.75));
+  // Phase 3: If candidate blob is smaller than targetMinBytes, extend & pad
+  const candidateBlob = bestBlob || (await canvasToBlob(canvas, outputMime, 0.75));
+  if (candidateBlob.size < targetMinBytes) {
+    return extendImageToTargetClient(img, targetMinBytes, targetMaxBytes, outputMime);
+  }
+
   return {
-    blob: finalBlob,
+    blob: candidateBlob,
     quality: Math.round(bestQ * 100),
     width: canvas.width,
     height: canvas.height,
@@ -230,20 +419,23 @@ export async function compressOptimalClient(
 export async function compressEnrollmentClient(
   photo: File,
   signature: File,
-  prefix: string
+  prefix: string,
+  photoMinKb: number = 30,
+  photoMaxKb: number = 50,
+  signMinKb: number = 10,
+  signMaxKb: number = 30
 ): Promise<EnrollmentResponse> {
   const cleanPrefix =
     prefix.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "") || "candidate";
 
-  // Target ranges: Photo 30KB–50KB, Signature 10KB–30KB
-  const photoMin = 30 * 1024;
-  const photoMax = 50 * 1024;
-  const signMin = 10 * 1024;
-  const signMax = 30 * 1024;
+  const pMin = Math.max(1, photoMinKb) * 1024;
+  const pMax = Math.max(photoMinKb, photoMaxKb) * 1024;
+  const sMin = Math.max(1, signMinKb) * 1024;
+  const sMax = Math.max(signMinKb, signMaxKb) * 1024;
 
   const [photoRes, signRes] = await Promise.all([
-    compressToTargetClient(photo, photoMin, photoMax, "image/jpeg"),
-    compressToTargetClient(signature, signMin, signMax, "image/jpeg"),
+    compressToTargetClient(photo, pMin, pMax, "image/jpeg"),
+    compressToTargetClient(signature, sMin, sMax, "image/jpeg"),
   ]);
 
   const jobId = "client-" + Math.random().toString(36).substring(2, 10);
@@ -268,14 +460,8 @@ export async function compressEnrollmentClient(
   registerBlobUrl(jobId, signFileId, signUrl);
   registerBlobUrl(jobId, undefined, zipUrl);
 
-  const photoSavings = Math.max(
-    0,
-    Math.round((1 - photoRes.blob.size / photo.size) * 1000) / 10
-  );
-  const signSavings = Math.max(
-    0,
-    Math.round((1 - signRes.blob.size / signature.size) * 1000) / 10
-  );
+  const photoSavings = Math.round((1 - photoRes.blob.size / photo.size) * 1000) / 10;
+  const signSavings = Math.round((1 - signRes.blob.size / signature.size) * 1000) / 10;
 
   return {
     job_id: jobId,
@@ -293,7 +479,7 @@ export async function compressEnrollmentClient(
       quality: photoRes.quality,
       width: photoRes.width,
       height: photoRes.height,
-      target_range: "30KB - 50KB",
+      target_range: `${photoMinKb}KB - ${photoMaxKb}KB`,
     },
     signature: {
       file_id: signFileId,
@@ -307,7 +493,7 @@ export async function compressEnrollmentClient(
       quality: signRes.quality,
       width: signRes.width,
       height: signRes.height,
-      target_range: "10KB - 30KB",
+      target_range: `${signMinKb}KB - ${signMaxKb}KB`,
     },
     photo_download_url: photoUrl,
     sign_download_url: signUrl,

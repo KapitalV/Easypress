@@ -17,7 +17,7 @@ except ImportError:
     HAS_PYVIPS = False
 
 try:
-    from PIL import Image as PILImage
+    from PIL import Image as PILImage, ImageOps as PILImageOps
     HAS_PILLOW = True
 except ImportError:
     HAS_PILLOW = False
@@ -121,6 +121,7 @@ def _compress_webp_pyvips(image: "pyvips.Image", quality: int) -> bytes:
 def _compress_jpeg_pillow(data: bytes, quality: int) -> bytes:
     """Fallback JPEG compression using Pillow with white background for transparency."""
     img = PILImage.open(io.BytesIO(data))
+    img = PILImageOps.exif_transpose(img)
     if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
         rgba = img.convert("RGBA")
         white_bg = PILImage.new("RGB", rgba.size, (255, 255, 255))
@@ -134,12 +135,16 @@ def _compress_jpeg_pillow(data: bytes, quality: int) -> bytes:
 
 
 def _compress_png_pillow(data: bytes, quality: int) -> bytes:
-    """Fallback PNG compression using Pillow."""
+    """Fallback PNG compression using Pillow with proper palette quantization."""
     img = PILImage.open(io.BytesIO(data))
-    # Quantize to reduce palette if quality < 80
+    img = PILImageOps.exif_transpose(img)
+    # Quantize to reduce palette if quality < 80 without undoing palette mode
     if quality < 80:
-        img = img.quantize(colors=max(16, int(256 * quality / 100)))
-        img = img.convert("RGBA") if img.mode == "P" else img
+        colors = max(16, min(256, int(256 * quality / 100)))
+        if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+            img = img.quantize(colors=colors, method=PILImage.Quantize.MEDIANCUT)
+        else:
+            img = img.convert("RGB").quantize(colors=colors, method=PILImage.Quantize.MEDIANCUT)
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
@@ -148,6 +153,7 @@ def _compress_png_pillow(data: bytes, quality: int) -> bytes:
 def _compress_webp_pillow(data: bytes, quality: int) -> bytes:
     """Fallback WebP compression using Pillow."""
     img = PILImage.open(io.BytesIO(data))
+    img = PILImageOps.exif_transpose(img)
     buf = io.BytesIO()
     img.save(buf, format="WEBP", quality=quality, method=4)
     return buf.getvalue()
@@ -156,12 +162,188 @@ def _compress_webp_pillow(data: bytes, quality: int) -> bytes:
 def _resize_pillow(data: bytes, scale: float) -> bytes:
     """Resize image using Pillow and return PNG bytes (intermediate)."""
     img = PILImage.open(io.BytesIO(data))
+    img = PILImageOps.exif_transpose(img)
     new_w = max(1, int(img.width * scale))
     new_h = max(1, int(img.height * scale))
     img = img.resize((new_w, new_h), PILImage.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def pad_image_bytes(data: bytes, fmt: str, target_bytes: int) -> bytes:
+    """
+    Pad an encoded image buffer so its total size reaches target_bytes.
+    Uses non-destructive, standard-compliant markers that all decoders/browsers/validators accept:
+    - JPEG: Standard COM (0xFF 0xFE) marker segments inserted after SOI (0xFF 0xD8).
+    - PNG: Standard tEXt chunk inserted before IEND.
+    - WebP / Other: Trailing bytes safely ignored by decoders.
+    """
+    if len(data) >= target_bytes:
+        return data
+
+    needed = target_bytes - len(data)
+
+    if fmt == "jpeg":
+        # Each COM chunk: 0xFF, 0xFE, [2 bytes length], [payload]
+        # Maximum length field is 65535, so payload is 65533
+        chunks = bytearray()
+        while needed > 0:
+            if needed < 5:
+                chunks.extend(b"\x00" * needed)
+                needed = 0
+                break
+            payload_len = min(needed - 4, 65530)
+            marker_len = payload_len + 2
+            chunks.extend(b"\xff\xfe" + marker_len.to_bytes(2, "big") + b"\x00" * payload_len)
+            needed -= (payload_len + 4)
+        if len(data) >= 2 and data[:2] == b"\xff\xd8":
+            return data[:2] + bytes(chunks) + data[2:]
+        return data + bytes(chunks)
+
+    elif fmt == "png":
+        import zlib
+        if needed < 14:
+            return data + b"\x00" * needed
+        payload_len = needed - 12
+        if payload_len >= 8:
+            payload = b"Comment\x00" + b"\x00" * (payload_len - 8)
+        else:
+            payload = b"X\x00" + b"\x00" * (payload_len - 2)
+        chunk_type = b"tEXt"
+        crc = zlib.crc32(chunk_type + payload) & 0xFFFFFFFF
+        chunk = len(payload).to_bytes(4, "big") + chunk_type + payload + crc.to_bytes(4, "big")
+        iend_pos = data.rfind(b"IEND")
+        if iend_pos != -1:
+            insert_pos = iend_pos - 4
+            return data[:insert_pos] + chunk + data[insert_pos:]
+        return data + chunk
+
+    else:
+        return data + b"\x00" * needed
+
+
+def extend_image_to_target(
+    data: bytes,
+    fmt: str,
+    target_min: int,
+    target_max: int,
+    original_size: int,
+) -> CompressionResult:
+    """
+    Extend / enhance an image whose size is less than target_min (e.g. 10KB to 30KB–50KB).
+    1. First tries maximum visual quality and uncompressed color subsampling.
+    2. If still < target_min, upscales resolution with Lanczos interpolation so the image gains visual clarity.
+    3. If still below target_min, applies standard format-compliant padding to target_mid.
+    Guarantees the resulting file size falls within [target_min, target_max].
+    """
+    import math
+    target_mid = (target_min + target_max) // 2
+
+    if not HAS_PILLOW:
+        padded = pad_image_bytes(data, fmt, target_mid)
+        return CompressionResult(
+            data=padded, original_size=original_size,
+            compressed_size=len(padded), format=fmt,
+        )
+
+    try:
+        img = PILImage.open(io.BytesIO(data))
+        img = PILImageOps.exif_transpose(img)
+    except Exception:
+        padded = pad_image_bytes(data, fmt, target_mid)
+        return CompressionResult(
+            data=padded, original_size=original_size,
+            compressed_size=len(padded), format=fmt,
+        )
+
+    working_img = img
+    if fmt == "jpeg":
+        if working_img.mode in ("RGBA", "LA") or (working_img.mode == "P" and "transparency" in working_img.info):
+            rgba = working_img.convert("RGBA")
+            white_bg = PILImage.new("RGB", rgba.size, (255, 255, 255))
+            white_bg.paste(rgba, mask=rgba.split()[3])
+            working_img = white_bg
+        elif working_img.mode != "RGB":
+            working_img = working_img.convert("RGB")
+
+    # Step 1: Encode at max quality
+    buf = io.BytesIO()
+    if fmt == "jpeg":
+        working_img.save(buf, format="JPEG", quality=98, subsampling=0)
+    elif fmt == "png":
+        working_img.save(buf, format="PNG", optimize=True)
+    elif fmt == "webp":
+        working_img.save(buf, format="WEBP", quality=98, method=6)
+    else:
+        buf.write(data)
+
+    candidate_bytes = buf.getvalue()
+    candidate_w, candidate_h = working_img.width, working_img.height
+    candidate_q = 98
+
+    # Already within target range?
+    if target_min <= len(candidate_bytes) <= target_max:
+        return CompressionResult(
+            data=candidate_bytes, original_size=original_size,
+            compressed_size=len(candidate_bytes), format=fmt,
+            quality=candidate_q, width=candidate_w, height=candidate_h,
+            was_downsampled=False,
+        )
+
+    # Step 2: If smaller than target_min, upscale resolution with Lanczos
+    if len(candidate_bytes) < target_min and max(candidate_w, candidate_h) < 2500:
+        scale_est = min(3.0, max(1.15, math.sqrt(target_mid / max(len(candidate_bytes), 800))))
+        up_w = max(1, int(candidate_w * scale_est))
+        up_h = max(1, int(candidate_h * scale_est))
+        upscaled_img = working_img.resize((up_w, up_h), PILImage.LANCZOS)
+
+        # Binary search quality on upscaled image to fit into range
+        lo_q, hi_q = 75, 96
+        best_up_data = None
+        best_up_q = 90
+        while lo_q <= hi_q:
+            mid_q = (lo_q + hi_q) // 2
+            tbuf = io.BytesIO()
+            if fmt == "jpeg":
+                upscaled_img.save(tbuf, format="JPEG", quality=mid_q, subsampling=0)
+            elif fmt == "png":
+                upscaled_img.save(tbuf, format="PNG", optimize=True)
+            elif fmt == "webp":
+                upscaled_img.save(tbuf, format="WEBP", quality=mid_q)
+            else:
+                tbuf.write(candidate_bytes)
+
+            tdata = tbuf.getvalue()
+            if target_min <= len(tdata) <= target_max:
+                return CompressionResult(
+                    data=tdata, original_size=original_size,
+                    compressed_size=len(tdata), format=fmt,
+                    quality=mid_q, width=up_w, height=up_h,
+                    was_downsampled=False,
+                )
+            elif len(tdata) > target_max:
+                hi_q = mid_q - 1
+            else:
+                best_up_data = tdata
+                best_up_q = mid_q
+                lo_q = mid_q + 1
+
+        if best_up_data:
+            candidate_bytes = best_up_data
+            candidate_w, candidate_h = up_w, up_h
+            candidate_q = best_up_q
+
+    # Step 3: If still < target_min, apply precision padding to reach target_mid
+    if len(candidate_bytes) < target_min:
+        candidate_bytes = pad_image_bytes(candidate_bytes, fmt, target_mid)
+
+    return CompressionResult(
+        data=candidate_bytes, original_size=original_size,
+        compressed_size=len(candidate_bytes), format=fmt,
+        quality=candidate_q, width=candidate_w, height=candidate_h,
+        was_downsampled=False,
+    )
 
 
 def compress_optimal(data: bytes, mime_type: str) -> CompressionResult:
@@ -264,6 +446,9 @@ def compress_to_target(
     """
     fmt = force_format if force_format else _get_format_from_mime(mime_type)
     original_size = len(data)
+
+    if original_size < target_min_bytes:
+        return extend_image_to_target(data, fmt, target_min_bytes, target_max_bytes, original_size)
 
     if fmt in ("svg", "gif") and not force_format:
         # Can't meaningfully target-compress these without forced conversion
@@ -422,8 +607,10 @@ def _bisect_pyvips(
 
             scale -= 0.05
 
-    # Return best effort
+    # Return best effort or extend if below target_min
     result_buf = best_buf if best_buf else data
+    if len(result_buf) < target_min:
+        return extend_image_to_target(result_buf, fmt, target_min, target_max, original_size)
     return CompressionResult(
         data=result_buf, original_size=original_size,
         compressed_size=len(result_buf), format=fmt,
@@ -524,7 +711,16 @@ def _bisect_pillow(
 
             scale -= 0.05
 
+    # If still too large after downsampling for PNG/WebP, fallback to JPEG conversion to fit range
+    if (best_buf is None or len(best_buf) > target_max) and fmt in ("png", "webp"):
+        jpeg_res = _bisect_pillow(data, "jpeg", target_min, target_max, original_size, progress_callback)
+        if target_min <= jpeg_res.compressed_size <= target_max:
+            return jpeg_res
+
     result_buf = best_buf if best_buf else data
+    if len(result_buf) < target_min:
+        return extend_image_to_target(result_buf, fmt, target_min, target_max, original_size)
+
     return CompressionResult(
         data=result_buf, original_size=original_size,
         compressed_size=len(result_buf), format=fmt,

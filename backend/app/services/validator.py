@@ -61,6 +61,26 @@ def detect_mime_type(data: bytes) -> Optional[str]:
                 continue
             return mime
 
+    # Pillow fallback for formats like BMP, TIFF, or non-standard headers
+    try:
+        import io
+        from PIL import Image
+        with Image.open(io.BytesIO(data)) as img:
+            fmt = img.format.lower() if img.format else ""
+            fmt_map = {
+                "jpeg": "image/jpeg",
+                "jpg": "image/jpeg",
+                "png": "image/png",
+                "webp": "image/webp",
+                "gif": "image/gif",
+                "bmp": "image/jpeg",  # Normalise BMP to JPEG
+                "tiff": "image/jpeg", # Normalise TIFF to JPEG
+            }
+            if fmt in fmt_map:
+                return fmt_map[fmt]
+    except Exception:
+        pass
+
     return None
 
 
@@ -167,21 +187,8 @@ def validate_file(data: bytes, filename: str) -> dict:
             "UNSUPPORTED_FORMAT",
         )
 
-    # 3. Check extension matches MIME (optional safety layer)
+    # 3. Soft check on extension: detected MIME type takes precedence so misnamed files still process cleanly
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    extension_map = {
-        "jpg": "image/jpeg", "jpeg": "image/jpeg",
-        "png": "image/png",
-        "webp": "image/webp",
-        "gif": "image/gif",
-        "svg": "image/svg+xml",
-    }
-    expected_mime = extension_map.get(ext)
-    if expected_mime and expected_mime != mime_type:
-        raise ValidationError(
-            f"File extension '.{ext}' does not match detected content type '{mime_type}'",
-            "EXTENSION_MISMATCH",
-        )
 
     # 4. Check image dimensions (decompression bomb protection)
     width, height = None, None

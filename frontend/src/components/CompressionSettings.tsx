@@ -115,18 +115,31 @@ export default function CompressionSettings({
           </div>
 
           {/* Quick Presets */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             <button
               type="button"
-              onClick={() => setTargetRange(10, 20)}
+              onClick={() => setTargetRange(30, 50)}
               className={`p-2.5 rounded-xl border text-left flex flex-col gap-1 transition-all cursor-pointer ${
-                options.targetMinKb === 10 && options.targetMaxKb === 20
+                options.targetMinKb === 30 && options.targetMaxKb === 50
                   ? "border-indigo-600 bg-indigo-50 text-indigo-900"
                   : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
               }`}
             >
-              <span className="text-[11px] font-bold">Govt / Passport</span>
-              <span className="text-[10px] text-slate-600 font-mono">10 – 20 KB</span>
+              <span className="text-[11px] font-bold">Govt / Exam Photo</span>
+              <span className="text-[10px] text-slate-600 font-mono">30 – 50 KB</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setTargetRange(10, 30)}
+              className={`p-2.5 rounded-xl border text-left flex flex-col gap-1 transition-all cursor-pointer ${
+                options.targetMinKb === 10 && options.targetMaxKb === 30
+                  ? "border-indigo-600 bg-indigo-50 text-indigo-900"
+                  : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+              }`}
+            >
+              <span className="text-[11px] font-bold">Govt Signature</span>
+              <span className="text-[10px] text-slate-600 font-mono">10 – 30 KB</span>
             </button>
 
             <button
@@ -164,11 +177,11 @@ export default function CompressionSettings({
               </label>
               <input
                 type="number"
-                min={5}
+                min={2}
                 max={options.targetMaxKb - 1}
                 value={options.targetMinKb}
                 onChange={(e) => {
-                  const val = Math.max(5, parseInt(e.target.value) || 5);
+                  const val = Math.max(2, parseInt(e.target.value) || 2);
                   onChange({
                     ...options,
                     targetMinKb: Math.min(val, options.targetMaxKb - 1),
@@ -203,6 +216,7 @@ export default function CompressionSettings({
           <div className="flex flex-col gap-2 pt-1">
             <div className="flex justify-between text-[10px] text-slate-600 font-mono">
               <span>10 KB</span>
+              <span>30 KB</span>
               <span>50 KB</span>
               <span>100 KB</span>
               <span>200 KB</span>
@@ -226,7 +240,7 @@ export default function CompressionSettings({
           <div className="flex items-start gap-2 text-[11px] text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-200">
             <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
             <span>
-              If image cannot fit within target size using quality scaling alone, it will be automatically downsampled in gentle 5% increments.
+              <strong>Bidirectional Smart Sizing:</strong> Large files will be compressed down to fit; small or lower-quality files (e.g. 10KB) are enhanced, upscaled, and extended to reach your target {options.targetMinKb}KB – {options.targetMaxKb}KB range.
             </span>
           </div>
         </div>
